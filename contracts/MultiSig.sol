@@ -16,6 +16,7 @@ contract MultiSig {
         uint value;
         bool executed;
         bytes data;
+        uint creationDate;
     }
 
     mapping(uint => Transaction) public transactions;
@@ -34,49 +35,35 @@ contract MultiSig {
         uint[] memory txIds = new uint[](count);
         uint runningCount = 0;
         for(uint i = 0; i < transactionCount; i++) {
-            if(pending && !transactions[i].executed ||
-                executed && transactions[i].executed) {
+            if(pending && !transactions[i].executed || executed && transactions[i].executed) {
                 txIds[runningCount] = i;
                 runningCount++;
             }
         }
         return txIds;
     }
-
     function getTransactionCount(bool pending, bool executed) view public returns(uint) {
         uint count = 0;
         for(uint i = 0; i < transactionCount; i++) {
-            if(pending && !transactions[i].executed ||
-                executed && transactions[i].executed) {
+            if(pending && !transactions[i].executed || executed && transactions[i].executed) {
                 count++;
             }
         }
         return count;
     }
 
+    
     function executeTransaction(uint transactionId) public {
-        require(isConfirmed(transactionId));
-        emit Execution(transactionId);
+        require(isConfirmed(transactionId));    //will be confirmed if enough transactions have been submitted
+        emit Execution(transactionId);                                                                              //Execution
         Transaction storage _tx = transactions[transactionId];
         (bool success, ) = _tx.destination.call{ value: _tx.value }(_tx.data);
         require(success, "Failed to execute transaction");
         _tx.executed = true;
     }
-
     function isConfirmed(uint transactionId) public view returns(bool) {
         return getConfirmationsCount(transactionId) >= required;
     }
-
-    function getConfirmationsCount(uint transactionId) public view returns(uint) {
-        uint count;
-        for(uint i = 0; i < owners.length; i++) {
-            if(confirmations[transactionId][owners[i]]) {
-                count++;
-            }
-        }
-        return count;
-    }
-
     function getConfirmations(uint transactionId) public view returns(address[] memory) {
         address[] memory confirmed = new address[](getConfirmationsCount(transactionId));
         uint runningConfirmed;
@@ -88,7 +75,40 @@ contract MultiSig {
         }
         return confirmed;
     }
+    function getConfirmationsCount(uint transactionId) public view returns(uint) {
+        uint count;
+        for(uint i = 0; i < owners.length; i++) {
+            if(confirmations[transactionId][owners[i]]) {
+                count++;
+            }
+        }
+        return count;
+    }
 
+    function isNotExpired(uint transactionId) public view returns(bool){
+        return(block.timestamp <= (transactions[transactionId].creationDate + 1 minutes));
+    }
+
+    function submitTransaction(address payable dest, uint value, bytes memory data) public {        //Submission
+        uint id = addTransaction(dest, value, data);
+        confirmTransaction(id);
+        emit Submission(id);
+    }
+    function addTransaction(address payable destination, uint value, bytes memory data) public returns(uint) {
+        uint creationDate = block.timestamp;
+        transactions[transactionCount] = Transaction(destination, value, false, data, creationDate);
+        transactionCount += 1;
+        return transactionCount - 1;
+    }
+    function confirmTransaction(uint transactionId) public {
+        require(isOwner(msg.sender));
+        require(isNotExpired(transactionId), "This proposal is expired and can no longer be voted on!"); //added this line
+        emit Confirmation(msg.sender, transactionId); /////i added this emit here
+        confirmations[transactionId][msg.sender] = true;
+        if(isConfirmed(transactionId)) {          //if enough confirmations, execute
+            executeTransaction(transactionId);
+        }
+    }
     function isOwner(address addr) private view returns(bool) {
         for(uint i = 0; i < owners.length; i++) {
             if(owners[i] == addr) {
@@ -96,27 +116,6 @@ contract MultiSig {
             }
         }
         return false;
-    }
-
-    function submitTransaction(address payable dest, uint value, bytes memory data) public {
-        uint id = addTransaction(dest, value, data);
-        confirmTransaction(id);
-        emit Submission(id);
-    }
-
-    function confirmTransaction(uint transactionId) public {
-        require(isOwner(msg.sender));
-        Confirmation(msg.sender, transactionId);
-        confirmations[transactionId][msg.sender] = true;
-        if(isConfirmed(transactionId)) {
-            executeTransaction(transactionId);
-        }
-    }
-
-    function addTransaction(address payable destination, uint value, bytes memory data) public returns(uint) {
-        transactions[transactionCount] = Transaction(destination, value, false, data);
-        transactionCount += 1;
-        return transactionCount - 1;
     }
 
     constructor(address[] memory _owners, uint _confirmations) {
